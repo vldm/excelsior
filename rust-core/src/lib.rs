@@ -89,7 +89,7 @@ pub enum ExcelError {
     NoData { description: String },
 }
 
-/// Result type alias using our custom error type
+/// Result type alias using our custom error type for convenience
 pub type Result<T> = std::result::Result<T, ExcelError>;
 
 #[cfg(feature = "polars")]
@@ -121,7 +121,7 @@ pub struct XlsxEditor {
 /// Work with files
 impl XlsxEditor {
     /// Открывает книгу и подготавливает лист `sheet_id` (1‑based).
-    pub fn open_sheet<P: AsRef<Path>>(src: P, sheet_id: usize) -> Result<Self> {
+    pub fn open_sheet<P: AsRef<Path>>(src: P, sheet_id: usize) -> std::result::Result<Self, ExcelError> {
         let src_path = src.as_ref().to_path_buf();
         let mut zip = zip_crate::ZipArchive::new(File::open(&src_path)?)?;
 
@@ -219,7 +219,7 @@ impl XlsxEditor {
     ///
     /// # Returns
     /// A `Result` indicating success or an `ExcelError` if the save operation fails.
-    pub fn save<P: AsRef<Path>>(&self, dst: P) -> Result<()> {
+    pub fn save<P: AsRef<Path>>(&self, dst: P) -> std::result::Result<(), ExcelError> {
         let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
         let mut zout = zip_crate::ZipWriter::new(File::create(dst)?);
 
@@ -281,7 +281,7 @@ impl XlsxEditor {
     }
     /// Добавляет новый пустой лист с именем `sheet_name`
     /// (он станет первым во вкладках).
-    pub fn add_worksheet(&mut self, sheet_name: &str) -> Result<&mut Self> {
+    pub fn add_worksheet(&mut self, sheet_name: &str) -> std::result::Result<&mut Self, ExcelError> {
         // 1) читаем исходный архив
         let sheet_names = scan(&self.src_path)?;
         if sheet_names.contains(&sheet_name.to_owned()) {
@@ -450,7 +450,7 @@ impl XlsxEditor {
     ///
     /// Note: The workbook on disk is **overwritten**. If you need to keep the original
     #[cfg(feature = "polars")]
-    pub fn with_polars(&mut self, df: &DataFrame, start_cell: Option<&str>) -> Result<()> {
+    pub fn with_polars(&mut self, df: &DataFrame, start_cell: Option<&str>) -> std::result::Result<(), ExcelError> {
         // Remove existing data so that the DataFrame overwrites the sheet.
         // self.clear_sheet()?;
 
@@ -578,7 +578,7 @@ impl XlsxEditor {
     /// columns such as "B,D". The function scans the sheet for the highest populated row
     /// across all specified columns and returns that 1-based row index. If no data is found
     /// in those columns, `Ok(0)` is returned.
-    pub fn get_last_row_index(&self, columns: &str) -> Result<u32> {
+    pub fn get_last_row_index(&self, columns: &str) -> std::result::Result<u32, ExcelError> {
         // Local helper to split coordinate like "C12" -> ("C", 12)
         fn split_coord(coord: &str) -> (String, u32) {
             let pos = coord
@@ -631,7 +631,7 @@ impl XlsxEditor {
     /// the range and is ordered left-to-right.
     ///
     /// Example: `get_last_roww_index("A:C")` might return `[10, 12, 7]`.
-    pub fn get_last_roww_index(&self, range: &str) -> Result<Vec<u32>> {
+    pub fn get_last_roww_index(&self, range: &str) -> std::result::Result<Vec<u32>, ExcelError> {
         let parts: Vec<&str> = range.split(':').collect();
         if parts.len() != 2 {
             return Err(ExcelError::InvalidRange { 
@@ -697,7 +697,7 @@ impl XlsxEditor {
 
 ///Style Part
 impl XlsxEditor {
-    pub fn set_number_format(&mut self, range: &str, fmt: &str) -> Result<()> {
+    pub fn set_number_format(&mut self, range: &str, fmt: &str) -> std::result::Result<(), ExcelError> {
         let style_id = self.ensure_style(Some(fmt), None, None, None)?;
         match parse_target(range)? {
             Target::Cell(c) => self.apply_style_to_cell(&c, style_id)?,
@@ -1096,14 +1096,14 @@ impl XlsxEditor {
 
     /// «Колончный» способ: задаёт формат через `<col … style="…"/>`
     /// (Excel применит стиль даже к будущим ячейкам столбца).
-    pub fn set_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
+    pub fn set_column_number_format(&mut self, col_letter: &str, fmt: &str) -> std::result::Result<(), ExcelError> {
         let style_id = self.ensure_style(Some(fmt), None, None, None)?;
         self.apply_style_to_column(col_index(col_letter) as u32, style_id)
     }
 
     /// Тот же формат, но **насильно** проставляет стиль
     /// всем существующим ячейкам столбца.
-    pub fn force_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
+    pub fn force_column_number_format(&mut self, col_letter: &str, fmt: &str) -> std::result::Result<(), ExcelError> {
         self.set_column_number_format(col_letter, fmt)?;
 
         let style_id = self.ensure_style(Some(fmt), None, None, None)?;
@@ -1206,7 +1206,7 @@ impl XlsxEditor {
     ///
     /// # Returns
     /// A `Result` containing an `XlsxEditor` instance if successful, or an `ExcelError` otherwise.
-    pub fn open<P: AsRef<Path>>(src: P, sheet_name: &str) -> Result<Self> {
+    pub fn open<P: AsRef<Path>>(src: P, sheet_name: &str) -> std::result::Result<Self, ExcelError> {
         let sheet_names = scan(src.as_ref())?;
         let sheet_id = sheet_names
             .iter()
@@ -1229,7 +1229,7 @@ impl XlsxEditor {
     ///
     /// # Returns
     /// A `Result` indicating success or an `ExcelError` if the operation fails.
-    pub fn append_row<I, S>(&mut self, cells: I) -> Result<()>
+    pub fn append_row<I, S>(&mut self, cells: I) -> std::result::Result<(), ExcelError>
     where
         I: IntoIterator<Item = S>,
         S: ToString,
@@ -1307,7 +1307,7 @@ impl XlsxEditor {
     ///
     /// # Returns
     /// A `Result` indicating success or an `ExcelError` if the operation fails.
-    pub fn append_table<R, I, S>(&mut self, rows: R) -> Result<()>
+    pub fn append_table<R, I, S>(&mut self, rows: R) -> std::result::Result<(), ExcelError>
     where
         R: IntoIterator<Item = I>,
         I: IntoIterator<Item = S>,
@@ -1401,7 +1401,7 @@ impl XlsxEditor {
     ///
     /// # Returns
     /// A `Result` indicating success or an `ExcelError` if the operation fails.
-    pub fn append_table_at<R, I, S>(&mut self, start_coord: &str, rows: R) -> Result<()>
+    pub fn append_table_at<R, I, S>(&mut self, start_coord: &str, rows: R) -> std::result::Result<(), ExcelError>
     where
         R: IntoIterator<Item = I>,
         I: IntoIterator<Item = S>,
@@ -1536,7 +1536,7 @@ impl XlsxEditor {
     ///
     /// # Returns
     /// A `Result` indicating success or an `ExcelError` if the operation fails.
-    pub fn set_cell<S: ToString>(&mut self, coord: &str, value: S) -> Result<()> {
+    pub fn set_cell<S: ToString>(&mut self, coord: &str, value: S) -> std::result::Result<(), ExcelError> {
         // Extract row number from coordinate.
         let row_start = coord
             .find(|c: char| c.is_ascii_digit())
@@ -1719,7 +1719,7 @@ impl XlsxEditor {
     }
 }
 
-pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
+pub fn scan<P: AsRef<Path>>(src: P) -> std::result::Result<Vec<String>, ExcelError> {
     let mut zip = zip_crate::ZipArchive::new(File::open(src)?)?;
     let mut wb = zip
         .by_name("xl/workbook.xml")
@@ -1753,7 +1753,7 @@ pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
 }
 
 impl XlsxEditor {
-    pub fn merge_cells(&mut self, range: &str) -> Result<()> {
+    pub fn merge_cells(&mut self, range: &str) -> std::result::Result<(), ExcelError> {
         // 1. позиция после </sheetData>
         let sd_end = find_bytes(&self.sheet_xml, b"</sheetData>")
             .ok_or_else(|| ExcelError::XmlElementNotFound {
@@ -1878,14 +1878,14 @@ impl XlsxEditor {
         size: f32,
         bold: bool,
         italic: bool,
-    ) -> Result<&mut Self> {
+    ) -> std::result::Result<&mut Self, ExcelError> {
         let new_font = self.ensure_font(name, size, bold, italic)?;
         self._merge_and_apply(range, |_old_font, fill| (Some(new_font), fill))?;
         Ok(self)
     }
 
     /// Устанавливает однотонную **заливку** (`rgb` = "FFFF00" без `#`)
-    pub fn set_fill(&mut self, range: &str, rgb: &str) -> Result<&mut Self> {
+    pub fn set_fill(&mut self, range: &str, rgb: &str) -> std::result::Result<&mut Self, ExcelError> {
         let new_fill = self.ensure_fill(rgb)?;
         self._merge_and_apply(range, |font, _old_fill| (font, Some(new_fill)))?;
         Ok(self)
