@@ -5,7 +5,9 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 mod test;
 
-use anyhow::{Context, Result, bail};
+// Error handling: Using thiserror for structured error types instead of anyhow
+// This provides better type safety and more informative error messages
+use thiserror::Error;
 use quick_xml::{Reader, Writer, events::Event};
 use regex::Regex;
 use std::{
@@ -16,6 +18,150 @@ use std::{
 // use tempfile::NamedTempFile;
 // use zip::{ZipArchive, ZipWriter, write::FileOptions};
 use ::zip as zip_crate;
+
+/// Comprehensive error type for Excel operations using thiserror
+/// 
+/// This enum covers all possible error scenarios that can occur during Excel file processing,
+/// providing specific error variants for different failure modes. Each variant includes
+/// contextual information to help identify and debug issues.
+/// 
+/// # Error Categories
+/// 
+/// ## File Operations
+/// - [`Io`](ExcelError::Io) - General I/O errors (file not found, permission denied, etc.)
+/// - [`Zip`](ExcelError::Zip) - ZIP archive operation failures
+/// - [`FileNotFound`](ExcelError::FileNotFound) - Specific file missing from ZIP archive
+/// 
+/// ## Data Parsing
+/// - [`Xml`](ExcelError::Xml) - XML parsing and structure errors  
+/// - [`ParseInt`](ExcelError::ParseInt) - Integer parsing failures
+/// - [`ParseFloat`](ExcelError::ParseFloat) - Float parsing failures
+/// - [`Utf8`](ExcelError::Utf8) - UTF-8 string conversion errors
+/// - [`Regex`](ExcelError::Regex) - Regular expression compilation errors
+/// 
+/// ## Excel Structure
+/// - [`XmlElementNotFound`](ExcelError::XmlElementNotFound) - Missing required XML elements
+/// - [`MalformedXml`](ExcelError::MalformedXml) - Invalid XML structure
+/// - [`InvalidCoordinate`](ExcelError::InvalidCoordinate) - Invalid cell coordinates (e.g., "Z999999")
+/// - [`InvalidRange`](ExcelError::InvalidRange) - Invalid cell range format
+/// 
+/// ## Business Logic
+/// - [`SheetExists`](ExcelError::SheetExists) - Attempting to create duplicate sheet
+/// - [`SheetNotFound`](ExcelError::SheetNotFound) - Referenced sheet doesn't exist
+/// - [`StyleError`](ExcelError::StyleError) - Styling operation failures
+/// - [`OperationFailed`](ExcelError::OperationFailed) - General operation failures with context
+/// - [`NoData`](ExcelError::NoData) - Empty or missing data errors
+/// 
+/// # Example Usage
+/// 
+/// ```rust
+/// use rust_core::{XlsxEditor, ExcelError};
+/// 
+/// match XlsxEditor::open("missing.xlsx", "Sheet1") {
+///     Ok(editor) => {
+///         // Process the Excel file
+///     }
+///     Err(ExcelError::Io(io_err)) => {
+///         eprintln!("File I/O error: {}", io_err);
+///     }
+///     Err(ExcelError::SheetNotFound { name }) => {
+///         eprintln!("Sheet '{}' not found", name);
+///     }
+///     Err(other) => {
+///         eprintln!("Other error: {}", other);
+///     }
+/// }
+/// ```
+#[derive(Error, Debug)]
+pub enum ExcelError {
+    /// IO operation failed
+    #[error("IO operation failed: {0}")]
+    Io(#[from] std::io::Error),
+
+    /// ZIP archive operation failed
+    #[error("ZIP archive operation failed: {0}")]
+    Zip(#[from] zip_crate::result::ZipError),
+
+    /// XML parsing or structure error
+    #[error("XML parsing error: {0}")]
+    Xml(#[from] quick_xml::Error),
+
+    /// Number parsing error
+    #[error("Number parsing error: {0}")]
+    ParseInt(#[from] std::num::ParseIntError),
+
+    /// Float parsing error
+    #[error("Float parsing error: {0}")]
+    ParseFloat(#[from] std::num::ParseFloatError),
+
+    /// UTF-8 string conversion error
+    #[error("UTF-8 conversion error: {0}")]
+    Utf8(#[from] std::str::Utf8Error),
+
+    /// Regex compilation error
+    #[error("Regex error: {0}")]
+    Regex(#[from] regex::Error),
+
+    /// File not found in ZIP archive
+    #[error("File '{filename}' not found in ZIP archive")]
+    FileNotFound { filename: String },
+
+    /// XML element not found
+    #[error("XML element '{element}' not found")]
+    XmlElementNotFound { element: String },
+
+    /// Invalid cell coordinate format
+    #[error("Invalid cell coordinate format: '{coord}' - {reason}")]
+    InvalidCoordinate { coord: String, reason: String },
+
+    /// Invalid range format
+    #[error("Invalid range format: '{range}' - {reason}")]
+    InvalidRange { range: String, reason: String },
+
+    /// Sheet already exists
+    #[error("Sheet '{name}' already exists")]
+    SheetExists { name: String },
+
+    /// Sheet not found
+    #[error("Sheet '{name}' not found")]
+    SheetNotFound { name: String },
+
+    /// Malformed XML structure
+    #[error("Malformed XML structure: {description}")]
+    MalformedXml { description: String },
+
+    /// Style operation error
+    #[error("Style operation failed: {operation} - {reason}")]
+    StyleError { operation: String, reason: String },
+
+    /// General operation error with context
+    #[error("Operation failed: {operation} - {context}")]
+    OperationFailed { operation: String, context: String },
+
+    /// Empty or missing data
+    #[error("No data provided: {description}")]
+    NoData { description: String },
+}
+
+/// Result type alias using our custom error type for convenience
+/// 
+/// This type alias provides a shorthand for `std::result::Result<T, ExcelError>`,
+/// making function signatures more concise while maintaining type safety.
+/// 
+/// All public functions in this crate return this Result type, which ensures
+/// consistent error handling across the API.
+/// 
+/// # Example
+/// 
+/// ```rust
+/// use rust_core::{Result, ExcelError};
+/// 
+/// fn example_function() -> Result<String> {
+///     // This is equivalent to: std::result::Result<String, ExcelError>
+///     Ok("success".to_string())
+/// }
+/// ```
+pub type Result<T> = std::result::Result<T, ExcelError>;
 
 #[cfg(feature = "polars")]
 use polars_core::prelude::*;
@@ -46,7 +192,7 @@ pub struct XlsxEditor {
 /// Work with files
 impl XlsxEditor {
     /// Открывает книгу и подготавливает лист `sheet_id` (1‑based).
-    pub fn open_sheet<P: AsRef<Path>>(src: P, sheet_id: usize) -> Result<Self> {
+    pub fn open_sheet<P: AsRef<Path>>(src: P, sheet_id: usize) -> std::result::Result<Self, ExcelError> {
         let src_path = src.as_ref().to_path_buf();
         let mut zip = zip_crate::ZipArchive::new(File::open(&src_path)?)?;
 
@@ -58,7 +204,9 @@ impl XlsxEditor {
         let sheet_xml: Vec<u8> = {
             let mut sheet = zip
                 .by_name(&sheet_path)
-                .with_context(|| format!("{sheet_path} not found"))?;
+                .map_err(|_| ExcelError::FileNotFound { 
+                    filename: sheet_path.clone() 
+                })?;
             let mut buf = Vec::with_capacity(sheet.size() as usize);
             sheet.read_to_end(&mut buf)?;
             buf
@@ -68,7 +216,9 @@ impl XlsxEditor {
         let styles_xml: Vec<u8> = {
             let mut styles = zip
                 .by_name("xl/styles.xml")
-                .context("styles.xml not found")?;
+                .map_err(|_| ExcelError::FileNotFound { 
+                    filename: "xl/styles.xml".to_string() 
+                })?;
             let mut buf = Vec::with_capacity(styles.size() as usize);
             styles.read_to_end(&mut buf)?;
             buf
@@ -78,7 +228,9 @@ impl XlsxEditor {
         let workbook_xml: Vec<u8> = {
             let mut wb = zip
                 .by_name("xl/workbook.xml")
-                .context("xl/workbook.xml not found")?;
+                .map_err(|_| ExcelError::FileNotFound { 
+                    filename: "xl/workbook.xml".to_string() 
+                })?;
             let mut buf = Vec::with_capacity(wb.size() as usize);
             wb.read_to_end(&mut buf)?;
             buf
@@ -88,7 +240,9 @@ impl XlsxEditor {
         let rels_xml: Vec<u8> = {
             let mut rels = zip
                 .by_name("xl/_rels/workbook.xml.rels")
-                .context("xl/_rels/workbook.xml.rels not found")?;
+                .map_err(|_| ExcelError::FileNotFound { 
+                    filename: "xl/_rels/workbook.xml.rels".to_string() 
+                })?;
             let mut buf = Vec::with_capacity(rels.size() as usize);
             rels.read_to_end(&mut buf)?;
             buf
@@ -135,8 +289,8 @@ impl XlsxEditor {
     /// * `dest` - An optional path to save the modified file. If `None`, the original file will be overwritten.
     ///
     /// # Returns
-    /// A `Result` indicating success or an `anyhow::Error` if the save operation fails.
-    pub fn save<P: AsRef<Path>>(&self, dst: P) -> Result<()> {
+    /// A `Result` indicating success or an `ExcelError` if the save operation fails.
+    pub fn save<P: AsRef<Path>>(&self, dst: P) -> std::result::Result<(), ExcelError> {
         let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
         let mut zout = zip_crate::ZipWriter::new(File::create(dst)?);
 
@@ -198,11 +352,13 @@ impl XlsxEditor {
     }
     /// Добавляет новый пустой лист с именем `sheet_name`
     /// (он станет первым во вкладках).
-    pub fn add_worksheet(&mut self, sheet_name: &str) -> Result<&mut Self> {
+    pub fn add_worksheet(&mut self, sheet_name: &str) -> std::result::Result<&mut Self, ExcelError> {
         // 1) читаем исходный архив
         let sheet_names = scan(&self.src_path)?;
         if sheet_names.contains(&sheet_name.to_owned()) {
-            bail!("Sheet {} already exists", sheet_name);
+            return Err(ExcelError::SheetExists { 
+                name: sheet_name.to_string() 
+            });
         }
         let mut zin = zip_crate::ZipArchive::new(File::open(&self.src_path)?)?;
 
@@ -300,14 +456,18 @@ impl XlsxEditor {
 
             wb_xml.splice(pos..pos, tagged);
         } else {
-            bail!("</sheets> not found in workbook.xml");
+            return Err(ExcelError::XmlElementNotFound { 
+                element: "</sheets>".to_string() 
+            });
         }
 
         // 5) вставляем Relationship перед </Relationships>
         if let Some(pos) = rels_xml.windows(16).rposition(|w| w == b"</Relationships>") {
             rels_xml.splice(pos..pos, rel_tag.as_bytes().iter().copied());
         } else {
-            bail!("</Relationships> not found in workbook.xml.rels");
+            return Err(ExcelError::XmlElementNotFound { 
+                element: "</Relationships>".to_string() 
+            });
         }
 
         // 6) минимальный XML нового листа
@@ -361,7 +521,7 @@ impl XlsxEditor {
     ///
     /// Note: The workbook on disk is **overwritten**. If you need to keep the original
     #[cfg(feature = "polars")]
-    pub fn with_polars(&mut self, df: &DataFrame, start_cell: Option<&str>) -> Result<()> {
+    pub fn with_polars(&mut self, df: &DataFrame, start_cell: Option<&str>) -> std::result::Result<(), ExcelError> {
         // Remove existing data so that the DataFrame overwrites the sheet.
         // self.clear_sheet()?;
 
@@ -404,7 +564,7 @@ impl XlsxEditor {
         dst: &Path,
         sheet_path: &str,
         new_xml: &[u8],
-    ) -> anyhow::Result<()> {
+    ) -> Result<()> {
         let mut zin = zip_crate::ZipArchive::new(File::open(src)?)?;
 
         // 1) Буфер‑growable в RAM
@@ -446,7 +606,9 @@ impl XlsxEditor {
             .position(|w| w == b"<sheetData");
         let start_idx = match start_opt {
             Some(idx) => idx,
-            None => bail!("<sheetData> tag not found"),
+            None => return Err(ExcelError::XmlElementNotFound { 
+                element: "<sheetData>".to_string() 
+            }),
         };
 
         // Find the end of the opening tag, i.e. the first '>' after the tag start.
@@ -454,7 +616,9 @@ impl XlsxEditor {
             .iter()
             .position(|&b| b == b'>')
             .map(|rel| start_idx + rel + 1)
-            .context("Malformed <sheetData> tag")?;
+            .ok_or_else(|| ExcelError::MalformedXml { 
+                description: "Malformed <sheetData> tag".to_string() 
+            })?;
 
         // Locate the closing </sheetData> tag.
         let end_opt = self
@@ -463,7 +627,9 @@ impl XlsxEditor {
             .position(|w| w == b"</sheetData>");
         let end_idx = match end_opt {
             Some(idx) => idx,
-            None => bail!("</sheetData> tag not found"),
+            None => return Err(ExcelError::XmlElementNotFound { 
+                element: "</sheetData>".to_string() 
+            }),
         };
 
         // Remove everything between the tags.
@@ -483,7 +649,7 @@ impl XlsxEditor {
     /// columns such as "B,D". The function scans the sheet for the highest populated row
     /// across all specified columns and returns that 1-based row index. If no data is found
     /// in those columns, `Ok(0)` is returned.
-    pub fn get_last_row_index(&self, columns: &str) -> Result<u32> {
+    pub fn get_last_row_index(&self, columns: &str) -> std::result::Result<u32, ExcelError> {
         // Local helper to split coordinate like "C12" -> ("C", 12)
         fn split_coord(coord: &str) -> (String, u32) {
             let pos = coord
@@ -499,7 +665,9 @@ impl XlsxEditor {
             .map(|s| s.trim().to_ascii_uppercase())
             .collect();
         if targets.is_empty() {
-            bail!("no columns supplied")
+            return Err(ExcelError::NoData { 
+                description: "no columns supplied".to_string() 
+            });
         }
 
         let mut reader = Reader::from_reader(self.sheet_xml.as_slice());
@@ -534,10 +702,13 @@ impl XlsxEditor {
     /// the range and is ordered left-to-right.
     ///
     /// Example: `get_last_roww_index("A:C")` might return `[10, 12, 7]`.
-    pub fn get_last_roww_index(&self, range: &str) -> Result<Vec<u32>> {
+    pub fn get_last_roww_index(&self, range: &str) -> std::result::Result<Vec<u32>, ExcelError> {
         let parts: Vec<&str> = range.split(':').collect();
         if parts.len() != 2 {
-            bail!("range must be in the form A:E")
+            return Err(ExcelError::InvalidRange { 
+                range: range.to_string(),
+                reason: "range must be in the form A:E".to_string() 
+            });
         }
         // Reuse helpers from outer function
         fn letters_to_col_idx(s: &str) -> usize {
@@ -560,7 +731,10 @@ impl XlsxEditor {
         let start_idx = letters_to_col_idx(&start);
         let end_idx = letters_to_col_idx(&end);
         if start_idx > end_idx {
-            bail!("invalid range order")
+            return Err(ExcelError::InvalidRange { 
+                range: range.to_string(),
+                reason: "invalid range order".to_string() 
+            });
         }
         let mut per_col_last: Vec<u32> = vec![0; end_idx - start_idx + 1];
 
@@ -594,7 +768,7 @@ impl XlsxEditor {
 
 ///Style Part
 impl XlsxEditor {
-    pub fn set_number_format(&mut self, range: &str, fmt: &str) -> Result<()> {
+    pub fn set_number_format(&mut self, range: &str, fmt: &str) -> std::result::Result<(), ExcelError> {
         let style_id = self.ensure_style(Some(fmt), None, None, None)?;
         match parse_target(range)? {
             Target::Cell(c) => self.apply_style_to_cell(&c, style_id)?,
@@ -681,7 +855,9 @@ impl XlsxEditor {
                 } else {
                     // блока ещё нет – создаём сразу после <styleSheet …>
                     let insert = find_bytes(&self.styles_xml, b">")
-                        .context("styles.xml: <styleSheet> start tag not found")?
+                        .ok_or_else(|| ExcelError::MalformedXml { 
+                            description: "styles.xml: <styleSheet> start tag not found".to_string() 
+                        })?
                         + 1;
                     let block = format!(r#"<numFmts count="1">{}</numFmts>"#, tag);
                     self.styles_xml
@@ -783,7 +959,9 @@ impl XlsxEditor {
 
         // вставляем перед </cellXfs>
         let pos = find_bytes(&self.styles_xml, b"</cellXfs>")
-            .context("styles.xml: </cellXfs> not found")?;
+            .ok_or_else(|| ExcelError::XmlElementNotFound { 
+                element: "</cellXfs>".to_string() 
+            })?;
         self.styles_xml
             .splice(pos..pos, xf.as_bytes().iter().copied());
 
@@ -849,7 +1027,9 @@ impl XlsxEditor {
 
         // конец строки </row>
         let row_end = find_bytes_from(&self.sheet_xml, b"</row>", row_pos)
-            .ok_or_else(|| anyhow::anyhow!("</row> not found"))?;
+            .ok_or_else(|| ExcelError::XmlElementNotFound { 
+                element: "</row>".to_string() 
+            })?;
 
         // ── ищем ячейку <c r="A1" …>
         let cell_tag = format!(r#"<c r="{coord}""#);
@@ -866,7 +1046,9 @@ impl XlsxEditor {
 
         // граница открывающего тега ячейки '>'
         let ctag_end = find_bytes_from(&self.sheet_xml, b">", cpos)
-            .ok_or_else(|| anyhow::anyhow!("malformed <c> tag"))?;
+            .ok_or_else(|| ExcelError::MalformedXml { 
+                description: "malformed <c> tag".to_string() 
+            })?;
 
         // ── проверяем/ставим атрибут s="…"
         if let Some(sattr) = find_bytes_from(&self.sheet_xml, b" s=\"", cpos) {
@@ -899,7 +1081,9 @@ impl XlsxEditor {
             let new_row = format!(r#"<row r="{row}" s="{style}" customFormat="1"></row>"#);
             // вставим перед </sheetData>
             let pos = find_bytes(&self.sheet_xml, b"</sheetData>")
-                .ok_or_else(|| anyhow::anyhow!("</sheetData> not found"))?;
+                .ok_or_else(|| ExcelError::XmlElementNotFound { 
+                    element: "</sheetData>".to_string() 
+                })?;
             self.sheet_xml
                 .splice(pos..pos, new_row.as_bytes().iter().copied());
         }
@@ -983,14 +1167,14 @@ impl XlsxEditor {
 
     /// «Колончный» способ: задаёт формат через `<col … style="…"/>`
     /// (Excel применит стиль даже к будущим ячейкам столбца).
-    pub fn set_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
+    pub fn set_column_number_format(&mut self, col_letter: &str, fmt: &str) -> std::result::Result<(), ExcelError> {
         let style_id = self.ensure_style(Some(fmt), None, None, None)?;
         self.apply_style_to_column(col_index(col_letter) as u32, style_id)
     }
 
     /// Тот же формат, но **насильно** проставляет стиль
     /// всем существующим ячейкам столбца.
-    pub fn force_column_number_format(&mut self, col_letter: &str, fmt: &str) -> Result<()> {
+    pub fn force_column_number_format(&mut self, col_letter: &str, fmt: &str) -> std::result::Result<(), ExcelError> {
         self.set_column_number_format(col_letter, fmt)?;
 
         let style_id = self.ensure_style(Some(fmt), None, None, None)?;
@@ -1047,7 +1231,9 @@ impl XlsxEditor {
                 p + 2 // "/>"  → длина 2
             } else {
                 let p = find_bytes_from(&self.sheet_xml, b">", tag_start)
-                    .context("malformed <col> tag")?;
+                    .ok_or_else(|| ExcelError::MalformedXml { 
+                        description: "malformed <col> tag".to_string() 
+                    })?;
                 p + 1 // ">"   → длина 1
             };
             // ставим / заменяем  style="…"
@@ -1063,7 +1249,10 @@ impl XlsxEditor {
             } else {
                 // создаём новый <cols> перед <sheetData>
                 let sheetdata_pos =
-                    find_bytes(&self.sheet_xml, b"<sheetData").context("<sheetData> not found")?;
+                    find_bytes(&self.sheet_xml, b"<sheetData")
+                        .ok_or_else(|| ExcelError::XmlElementNotFound { 
+                            element: "<sheetData>".to_string() 
+                        })?;
                 let block = format!("<cols>{}</cols>", new_tag);
                 self.sheet_xml.splice(
                     sheetdata_pos..sheetdata_pos,
@@ -1087,13 +1276,15 @@ impl XlsxEditor {
     /// * `sheet_name` - The name of the sheet to open (e.g., "Sheet1").
     ///
     /// # Returns
-    /// A `Result` containing an `XlsxEditor` instance if successful, or an `anyhow::Error` otherwise.
-    pub fn open<P: AsRef<Path>>(src: P, sheet_name: &str) -> Result<Self> {
+    /// A `Result` containing an `XlsxEditor` instance if successful, or an `ExcelError` otherwise.
+    pub fn open<P: AsRef<Path>>(src: P, sheet_name: &str) -> std::result::Result<Self, ExcelError> {
         let sheet_names = scan(src.as_ref())?;
         let sheet_id = sheet_names
             .iter()
             .position(|n| n == sheet_name)
-            .context(format!("Sheet '{}' not found", sheet_name))?
+            .ok_or_else(|| ExcelError::SheetNotFound { 
+                name: sheet_name.to_string() 
+            })?
             + 1;
         println!("Sheet ID: {} with name {}", sheet_id, sheet_name);
         Self::open_sheet(src, sheet_id)
@@ -1108,8 +1299,8 @@ impl XlsxEditor {
     /// * `cells` - An iterator over values that can be converted to strings, representing the cells in the new row.
     ///
     /// # Returns
-    /// A `Result` indicating success or an `anyhow::Error` if the operation fails.
-    pub fn append_row<I, S>(&mut self, cells: I) -> Result<()>
+    /// A `Result` indicating success or an `ExcelError` if the operation fails.
+    pub fn append_row<I, S>(&mut self, cells: I) -> std::result::Result<(), ExcelError>
     where
         I: IntoIterator<Item = S>,
         S: ToString,
@@ -1170,7 +1361,9 @@ impl XlsxEditor {
             self.sheet_xml.splice(pos..pos, new_row_xml);
             Ok(())
         } else {
-            bail!("</sheetData> tag not found");
+            Err(ExcelError::XmlElementNotFound { 
+                element: "</sheetData>".to_string() 
+            })
         }
     }
 
@@ -1184,8 +1377,8 @@ impl XlsxEditor {
     /// * `rows` - An iterator over iterators of values that can be converted to strings, representing the rows and cells of the table.
     ///
     /// # Returns
-    /// A `Result` indicating success or an `anyhow::Error` if the operation fails.
-    pub fn append_table<R, I, S>(&mut self, rows: R) -> Result<()>
+    /// A `Result` indicating success or an `ExcelError` if the operation fails.
+    pub fn append_table<R, I, S>(&mut self, rows: R) -> std::result::Result<(), ExcelError>
     where
         R: IntoIterator<Item = I>,
         I: IntoIterator<Item = S>,
@@ -1261,7 +1454,9 @@ impl XlsxEditor {
             self.sheet_xml.splice(pos..pos, bulk_rows_xml);
             Ok(())
         } else {
-            bail!("</sheetData> tag not found");
+            Err(ExcelError::XmlElementNotFound { 
+                element: "</sheetData>".to_string() 
+            })
         }
     }
 
@@ -1276,8 +1471,8 @@ impl XlsxEditor {
     /// * `rows` - An iterator over iterators of values that can be converted to strings, representing the rows and cells of the table.
     ///
     /// # Returns
-    /// A `Result` indicating success or an `anyhow::Error` if the operation fails.
-    pub fn append_table_at<R, I, S>(&mut self, start_coord: &str, rows: R) -> Result<()>
+    /// A `Result` indicating success or an `ExcelError` if the operation fails.
+    pub fn append_table_at<R, I, S>(&mut self, start_coord: &str, rows: R) -> std::result::Result<(), ExcelError>
     where
         R: IntoIterator<Item = I>,
         I: IntoIterator<Item = S>,
@@ -1306,12 +1501,18 @@ impl XlsxEditor {
         // Parse the starting coordinate to get the initial column index and row number.
         let row_start_pos = start_coord
             .find(|c: char| c.is_ascii_digit())
-            .context("invalid start coordinate – no digits")?;
+            .ok_or_else(|| ExcelError::InvalidCoordinate {
+                coord: start_coord.to_string(),
+                reason: "no digits found".to_string(),
+            })?;
         let col_letters = &start_coord[..row_start_pos];
         let start_col_idx = letters_to_col_idx(col_letters);
         let current_row_num: u32 = start_coord[row_start_pos..]
             .parse()
-            .context("invalid row in start coordinate")?;
+            .map_err(|_| ExcelError::InvalidCoordinate {
+                coord: start_coord.to_string(),
+                reason: "invalid row number".to_string(),
+            })?;
 
         // Buffer to accumulate XML for new rows that need to be appended.
         let mut bulk_rows_xml = Vec::<u8>::new();
@@ -1389,7 +1590,9 @@ impl XlsxEditor {
             self.sheet_xml.splice(pos..pos, bulk_rows_xml);
             Ok(())
         } else {
-            bail!("</sheetData> tag not found");
+            Err(ExcelError::XmlElementNotFound { 
+                element: "</sheetData>".to_string() 
+            })
         }
     }
 
@@ -1403,15 +1606,21 @@ impl XlsxEditor {
     /// * `value` - The value to set for the cell, which can be converted to a string.
     ///
     /// # Returns
-    /// A `Result` indicating success or an `anyhow::Error` if the operation fails.
-    pub fn set_cell<S: ToString>(&mut self, coord: &str, value: S) -> Result<()> {
+    /// A `Result` indicating success or an `ExcelError` if the operation fails.
+    pub fn set_cell<S: ToString>(&mut self, coord: &str, value: S) -> std::result::Result<(), ExcelError> {
         // Extract row number from coordinate.
         let row_start = coord
             .find(|c: char| c.is_ascii_digit())
-            .context("invalid cell coordinate – no digits found")?;
+            .ok_or_else(|| ExcelError::InvalidCoordinate {
+                coord: coord.to_string(),
+                reason: "no digits found".to_string(),
+            })?;
         let row_num: u32 = coord[row_start..]
             .parse()
-            .context("invalid row number in cell coordinate")?;
+            .map_err(|_| ExcelError::InvalidCoordinate {
+                coord: coord.to_string(),
+                reason: "invalid row number".to_string(),
+            })?;
 
         let val_str = value.to_string();
         let is_formula = val_str.starts_with('=');
@@ -1566,7 +1775,9 @@ impl XlsxEditor {
                     .sheet_xml
                     .windows(12)
                     .rposition(|w| w == b"</sheetData>")
-                    .context("</sheetData> tag not found")?,
+                    .ok_or_else(|| ExcelError::XmlElementNotFound {
+                        element: "</sheetData>".to_string(),
+                    })?,
             };
 
             self.sheet_xml.splice(pos..pos, new_row_xml);
@@ -1579,11 +1790,13 @@ impl XlsxEditor {
     }
 }
 
-pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
+pub fn scan<P: AsRef<Path>>(src: P) -> std::result::Result<Vec<String>, ExcelError> {
     let mut zip = zip_crate::ZipArchive::new(File::open(src)?)?;
     let mut wb = zip
         .by_name("xl/workbook.xml")
-        .context("workbook.xml not found")?;
+        .map_err(|_| ExcelError::FileNotFound {
+            filename: "xl/workbook.xml".to_string(),
+        })?;
 
     let mut wb_xml = Vec::with_capacity(wb.size() as usize);
     wb.read_to_end(&mut wb_xml)?;
@@ -1611,17 +1824,21 @@ pub fn scan<P: AsRef<Path>>(src: P) -> Result<Vec<String>> {
 }
 
 impl XlsxEditor {
-    pub fn merge_cells(&mut self, range: &str) -> Result<()> {
+    pub fn merge_cells(&mut self, range: &str) -> std::result::Result<(), ExcelError> {
         // 1. позиция после </sheetData>
         let sd_end = find_bytes(&self.sheet_xml, b"</sheetData>")
-            .context("</sheetData> not found")?
+            .ok_or_else(|| ExcelError::XmlElementNotFound {
+                element: "</sheetData>".to_string(),
+            })?
             + "</sheetData>".len();
 
         let (insert_pos, created) = if let Some(pos) = find_bytes(&self.sheet_xml, b"<mergeCells") {
             // уже есть блок
             bump_count(&mut self.sheet_xml, b"<mergeCells", b"count=\"")?;
             let end = find_bytes_from(&self.sheet_xml, b"</mergeCells>", pos)
-                .context("</mergeCells> not found")?;
+                .ok_or_else(|| ExcelError::XmlElementNotFound {
+                    element: "</mergeCells>".to_string(),
+                })?;
             (end, false)
         } else {
             // нет блока – создаём
@@ -1662,7 +1879,9 @@ impl XlsxEditor {
 
         // 2) формируем <font> … и вставляем перед </fonts>
         let insert = find_bytes(&self.styles_xml, b"</fonts>")
-            .context("<fonts> block not found in styles.xml")?;
+            .ok_or_else(|| ExcelError::XmlElementNotFound {
+                element: "</fonts>".to_string(),
+            })?;
         let mut xml = String::from("<font>");
         if bold {
             xml.push_str("<b/>");
@@ -1700,7 +1919,9 @@ impl XlsxEditor {
 
         // 2) вставляем перед </fills>
         let insert = find_bytes(&self.styles_xml, b"</fills>")
-            .context("<fills> block not found in styles.xml")?;
+            .ok_or_else(|| ExcelError::XmlElementNotFound {
+                element: "</fills>".to_string(),
+            })?;
         let xml = format!(
             r#"<fill><patternFill patternType="solid"><fgColor rgb="{}"/><bgColor indexed="64"/></patternFill></fill>"#,
             rgb
@@ -1728,14 +1949,14 @@ impl XlsxEditor {
         size: f32,
         bold: bool,
         italic: bool,
-    ) -> Result<&mut Self> {
+    ) -> std::result::Result<&mut Self, ExcelError> {
         let new_font = self.ensure_font(name, size, bold, italic)?;
         self._merge_and_apply(range, |_old_font, fill| (Some(new_font), fill))?;
         Ok(self)
     }
 
     /// Устанавливает однотонную **заливку** (`rgb` = "FFFF00" без `#`)
-    pub fn set_fill(&mut self, range: &str, rgb: &str) -> Result<&mut Self> {
+    pub fn set_fill(&mut self, range: &str, rgb: &str) -> std::result::Result<&mut Self, ExcelError> {
         let new_fill = self.ensure_fill(rgb)?;
         self._merge_and_apply(range, |font, _old_fill| (font, Some(new_fill)))?;
         Ok(self)
@@ -1913,7 +2134,10 @@ fn parse_target(s: &str) -> Result<Target> {
     if let Some(caps) = re_row.captures(s) {
         return Ok(Target::Row(caps[1].parse::<u32>()?));
     }
-    bail!("invalid range syntax: {s}");
+    Err(ExcelError::InvalidRange {
+        range: s.to_string(),
+        reason: "invalid range syntax".to_string(),
+    })
 }
 // ──────────────────────────────────────────────────────────────────────
 // 4. ВСПОМОГАТЕЛЬНЫЕ  (буквы ↔ индекс, split_coord, splice‑утилиты)
@@ -1962,5 +2186,8 @@ fn bump_count(xml: &mut Vec<u8>, tag: &[u8], attr: &[u8]) -> Result<()> {
             return Ok(());
         }
     }
-    Err(anyhow::anyhow!("attribute count not found"))
+    Err(ExcelError::OperationFailed {
+        operation: "bump_count".to_string(),
+        context: "attribute count not found".to_string(),
+    })
 }
