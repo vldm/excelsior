@@ -5,6 +5,8 @@ static GLOBAL: MiMalloc = MiMalloc;
 
 mod test;
 
+// Error handling: Using thiserror for structured error types instead of anyhow
+// This provides better type safety and more informative error messages
 use thiserror::Error;
 use quick_xml::{Reader, Writer, events::Event};
 use regex::Regex;
@@ -18,6 +20,58 @@ use std::{
 use ::zip as zip_crate;
 
 /// Comprehensive error type for Excel operations using thiserror
+/// 
+/// This enum covers all possible error scenarios that can occur during Excel file processing,
+/// providing specific error variants for different failure modes. Each variant includes
+/// contextual information to help identify and debug issues.
+/// 
+/// # Error Categories
+/// 
+/// ## File Operations
+/// - [`Io`](ExcelError::Io) - General I/O errors (file not found, permission denied, etc.)
+/// - [`Zip`](ExcelError::Zip) - ZIP archive operation failures
+/// - [`FileNotFound`](ExcelError::FileNotFound) - Specific file missing from ZIP archive
+/// 
+/// ## Data Parsing
+/// - [`Xml`](ExcelError::Xml) - XML parsing and structure errors  
+/// - [`ParseInt`](ExcelError::ParseInt) - Integer parsing failures
+/// - [`ParseFloat`](ExcelError::ParseFloat) - Float parsing failures
+/// - [`Utf8`](ExcelError::Utf8) - UTF-8 string conversion errors
+/// - [`Regex`](ExcelError::Regex) - Regular expression compilation errors
+/// 
+/// ## Excel Structure
+/// - [`XmlElementNotFound`](ExcelError::XmlElementNotFound) - Missing required XML elements
+/// - [`MalformedXml`](ExcelError::MalformedXml) - Invalid XML structure
+/// - [`InvalidCoordinate`](ExcelError::InvalidCoordinate) - Invalid cell coordinates (e.g., "Z999999")
+/// - [`InvalidRange`](ExcelError::InvalidRange) - Invalid cell range format
+/// 
+/// ## Business Logic
+/// - [`SheetExists`](ExcelError::SheetExists) - Attempting to create duplicate sheet
+/// - [`SheetNotFound`](ExcelError::SheetNotFound) - Referenced sheet doesn't exist
+/// - [`StyleError`](ExcelError::StyleError) - Styling operation failures
+/// - [`OperationFailed`](ExcelError::OperationFailed) - General operation failures with context
+/// - [`NoData`](ExcelError::NoData) - Empty or missing data errors
+/// 
+/// # Example Usage
+/// 
+/// ```rust
+/// use rust_core::{XlsxEditor, ExcelError};
+/// 
+/// match XlsxEditor::open("missing.xlsx", "Sheet1") {
+///     Ok(editor) => {
+///         // Process the Excel file
+///     }
+///     Err(ExcelError::Io(io_err)) => {
+///         eprintln!("File I/O error: {}", io_err);
+///     }
+///     Err(ExcelError::SheetNotFound { name }) => {
+///         eprintln!("Sheet '{}' not found", name);
+///     }
+///     Err(other) => {
+///         eprintln!("Other error: {}", other);
+///     }
+/// }
+/// ```
 #[derive(Error, Debug)]
 pub enum ExcelError {
     /// IO operation failed
@@ -90,6 +144,23 @@ pub enum ExcelError {
 }
 
 /// Result type alias using our custom error type for convenience
+/// 
+/// This type alias provides a shorthand for `std::result::Result<T, ExcelError>`,
+/// making function signatures more concise while maintaining type safety.
+/// 
+/// All public functions in this crate return this Result type, which ensures
+/// consistent error handling across the API.
+/// 
+/// # Example
+/// 
+/// ```rust
+/// use rust_core::{Result, ExcelError};
+/// 
+/// fn example_function() -> Result<String> {
+///     // This is equivalent to: std::result::Result<String, ExcelError>
+///     Ok("success".to_string())
+/// }
+/// ```
 pub type Result<T> = std::result::Result<T, ExcelError>;
 
 #[cfg(feature = "polars")]
